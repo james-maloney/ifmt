@@ -20,14 +20,18 @@ func main() {
 	s := bufio.NewScanner(os.Stdin)
 
 	for s.Scan() {
-		var b []byte
 		if isXml {
-			b = formatXml(s.Bytes())
+			b := formatXml(s.Bytes())
+			fmt.Println(string(b))
 		} else {
-			b = formatJson(s.Bytes())
+			b := formatJson(s.Bytes())
+			s := &scanner{}
+			if err := s.parse(b); err != nil {
+				log.Fatal(err)
+			}
+			fmt.Println(s.buf.String())
 		}
 
-		fmt.Println(string(b))
 	}
 
 	if err := s.Err(); err != nil {

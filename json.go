@@ -21,14 +21,14 @@ const (
 )
 
 var (
-	objWrap  = ts.FG[ts.Blue1]
-	arrWrap  = ts.FG[ts.RosyBrown]
-	keyWrap  = ts.FG[ts.System3]
-	strWrap  = ts.FG[ts.Green3]
-	boolWrap = ts.FG[ts.Red1]
-	nullWrap = ts.FG[ts.Red1]
-	numWrap  = ts.FG[ts.Cornsilk1]
-	errWrap  = ts.FG[ts.Red31]
+	objWrap  = ts.FG[ts.System10]
+	arrWrap  = ts.FG[ts.System10]
+	keyWrap  = ts.FG[ts.Grey74]
+	strWrap  = ts.FG[ts.System14]
+	boolWrap = ts.FG[ts.System9]
+	nullWrap = ts.FG[ts.System9]
+	numWrap  = ts.FG[ts.System4]
+	errWrap  = ts.FG[ts.System1]
 )
 
 type scanner struct {
@@ -245,6 +245,13 @@ func valueStart(s *scanner, r rune) error {
 		s.buf.WriteRune(r)
 		s.buf.WriteString(ts.C)
 		return nil
+	case ']':
+		s.next = valueEnd
+		s.popState()
+		s.buf.WriteString(arrWrap)
+		s.buf.WriteRune(r)
+		s.buf.WriteString(ts.C)
+		return nil
 	case '"':
 		s.next = strValueStart
 		s.pushState(strValueState)
@@ -304,6 +311,15 @@ func keyStart(s *scanner, r rune) error {
 	}
 	if unicode.IsSpace(r) {
 		s.buf.WriteRune(r)
+		return nil
+	}
+	if r == '}' {
+		s.next = valueEnd
+		s.popState()
+		s.popState()
+		s.buf.WriteString(objWrap)
+		s.buf.WriteRune(r)
+		s.buf.WriteString(ts.C)
 		return nil
 	}
 

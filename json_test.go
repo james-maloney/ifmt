@@ -184,6 +184,8 @@ func Test(t *testing.T) {
 		{
 			[]byte(`
 {
+	"emptyObj": {},
+	"emptyArr": [],
 	"foo": "bar",
 	"baz": "bang",
 	"bang": {
@@ -212,6 +214,7 @@ func Test(t *testing.T) {
 		if err := s.parse(cs.val); err != nil {
 			t.Error(err)
 			t.Log(s.state)
+			t.Log(s.buf.String())
 			continue
 		}
 		fmt.Println(s.buf.String())
