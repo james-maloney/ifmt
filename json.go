@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	ts "github.com/james-maloney/termstyle"
+	"strings"
 	"unicode"
 )
 
@@ -25,13 +26,15 @@ var (
 	keyWrap  = ts.FG[ts.System3]
 	strWrap  = ts.FG[ts.Green3]
 	boolWrap = ts.FG[ts.Red1]
+	nullWrap = ts.FG[ts.Red1]
 	numWrap  = ts.FG[ts.Cornsilk1]
+	errWrap  = ts.FG[ts.Red31]
 )
 
 type scanner struct {
 	state []int
 	next  func(*scanner, rune) error
-	ft    []rune // false/true helper state
+	ftn   []rune // false/true/null helper state
 
 	buf bytes.Buffer
 }
@@ -48,7 +51,6 @@ func (s *scanner) popState() int {
 
 func (s *scanner) parse(data []byte) error {
 	s.next = valueStart
-
 	for _, v := range data {
 		if err := s.next(s, rune(v)); err != nil {
 			if err == eof {
@@ -57,7 +59,6 @@ func (s *scanner) parse(data []byte) error {
 			return err
 		}
 	}
-
 	if len(s.state) == 0 {
 		return nil
 	}
@@ -65,16 +66,184 @@ func (s *scanner) parse(data []byte) error {
 	return fmt.Errorf("JSON is incomplete")
 }
 
+func negNumStart(s *scanner, r rune) error {
+	s.buf.WriteRune(r)
+	if r >= '1' && r <= '9' {
+		s.next = numStart
+		return nil
+	}
+	if r == '0' {
+		s.next = zeroNumStart
+		return nil
+	}
+
+	return s.genErr("0-9")
+}
+
+func zeroNumStart(s *scanner, r rune) error {
+	if r == '.' {
+		s.buf.WriteRune(r)
+		s.next = numStart
+		return nil
+	}
+
+	s.buf.WriteString(ts.C)
+
+	if unicode.IsSpace(r) {
+		s.next = valueEnd
+		return nil
+	}
+
+	switch s.state[len(s.state)-1] {
+	case objState:
+		switch r {
+		case ',':
+			s.next = keyStart
+			s.pushState(keyState)
+			s.buf.WriteRune(r)
+			return nil
+		case '}':
+			s.popState()
+			s.buf.WriteString(objWrap)
+			s.buf.WriteRune(r)
+			s.buf.WriteString(ts.C)
+			return nil
+		}
+
+		s.buf.WriteRune(r)
+		return s.genErr(",", "}")
+	case arrState:
+		switch r {
+		case ',':
+			s.next = valueStart
+			s.buf.WriteRune(r)
+			return nil
+		case ']':
+			s.popState()
+			s.buf.WriteString(arrWrap)
+			s.buf.WriteRune(r)
+			s.buf.WriteString(ts.C)
+			return nil
+		}
+
+		s.buf.WriteRune(r)
+		return s.genErr(",", "]")
+	}
+
+	return fmt.Errorf("invalid num state")
+}
+
+func numStart(s *scanner, r rune) error {
+	if r >= '0' && r <= '9' {
+		s.buf.WriteRune(r)
+		return nil
+	}
+	if r == '.' {
+		s.buf.WriteRune(r)
+		s.next = decimalStart
+		return nil
+	}
+	if r == 'e' || r == 'E' {
+		s.buf.WriteRune(r)
+		s.next = eStart
+		return nil
+	}
+
+	return numEnd(s, r)
+}
+
+func decimalStart(s *scanner, r rune) error {
+	if r >= '0' && r <= '9' {
+		s.buf.WriteRune(r)
+		return nil
+	}
+	if r == 'e' || r == 'E' {
+		s.buf.WriteRune(r)
+		s.next = eStart
+		return nil
+	}
+	return numEnd(s, r)
+}
+
+func eStart(s *scanner, r rune) error {
+	s.buf.WriteRune(r)
+	if r >= '0' || r <= 9 || r == '+' || r == '-' {
+		s.next = numEnd
+		return nil
+	}
+
+	return s.genErr("0-9", "+", "-")
+}
+
+func numEnd(s *scanner, r rune) error {
+	if r >= '0' && r <= '9' {
+		s.buf.WriteRune(r)
+		return nil
+	}
+
+	s.buf.WriteString(ts.C)
+
+	if unicode.IsSpace(r) {
+		s.buf.WriteRune(r)
+		s.next = valueEnd
+		return nil
+	}
+
+	switch s.state[len(s.state)-1] {
+	case objState:
+		switch r {
+		case ',':
+			s.next = keyStart
+			s.pushState(keyState)
+			s.buf.WriteRune(r)
+			return nil
+		case '}':
+			s.popState()
+			s.buf.WriteString(objWrap)
+			s.buf.WriteRune(r)
+			s.buf.WriteString(ts.C)
+			return nil
+		}
+
+		s.buf.WriteRune(r)
+		return s.genErr(",", "}")
+	case arrState:
+		switch r {
+		case ',':
+			s.next = valueStart
+			s.buf.WriteRune(r)
+			return nil
+		case ']':
+			s.popState()
+			s.buf.WriteString(arrWrap)
+			s.buf.WriteRune(r)
+			s.buf.WriteString(ts.C)
+			return nil
+		}
+
+		s.buf.WriteRune(r)
+		return s.genErr(",", "]")
+	}
+
+	return fmt.Errorf("invalid num state")
+}
+
 func valueStart(s *scanner, r rune) error {
 	switch r {
 	case '{':
 		s.next = keyStart
 		s.pushState(objState)
+		s.pushState(keyState)
 		s.buf.WriteString(objWrap)
 		s.buf.WriteRune(r)
 		s.buf.WriteString(ts.C)
 		return nil
 	case '[':
+		s.next = valueStart
+		s.pushState(arrState)
+		s.buf.WriteString(arrWrap)
+		s.buf.WriteRune(r)
+		s.buf.WriteString(ts.C)
 		return nil
 	case '"':
 		s.next = strValueStart
@@ -82,27 +251,53 @@ func valueStart(s *scanner, r rune) error {
 		s.buf.WriteString(strWrap)
 		s.buf.WriteRune(r)
 		return nil
-	case 't', 'f', 'n':
+	case 't':
+		s.ftn = []rune{'r', 'u', 'e'}
+		s.next = boolNullStart
+		s.buf.WriteString(boolWrap)
+		s.buf.WriteRune(r)
+		return nil
+	case 'f':
+		s.ftn = []rune{'a', 'l', 's', 'e'}
+		s.next = boolNullStart
+		s.buf.WriteString(boolWrap)
+		s.buf.WriteRune(r)
+		return nil
+	case 'n':
+		s.ftn = []rune{'u', 'l', 'l'}
+		s.next = boolNullStart
+		s.buf.WriteString(nullWrap)
+		s.buf.WriteRune(r)
 		return nil
 	case '0':
+		s.next = zeroNumStart
+		s.buf.WriteString(numWrap)
+		s.buf.WriteRune(r)
 		return nil
 	case '-':
+		s.next = numStart
+		s.buf.WriteString(numWrap)
+		s.buf.WriteRune(r)
 		return nil
 	}
 	if r >= '1' && r <= '9' {
+		s.next = numStart
+		s.buf.WriteString(numWrap)
+		s.buf.WriteRune(r)
 		return nil
 	}
 	if unicode.IsSpace(r) {
+		s.buf.WriteRune(r)
 		return nil
 	}
 
-	return fmt.Errorf("invalid value '%v'", string(r))
+	s.buf.WriteRune(r)
+	return s.genErr("")
 }
 
 func keyStart(s *scanner, r rune) error {
 	if r == '"' {
 		s.next = keyEnd
-		s.pushState(keyState)
 		s.buf.WriteString(keyWrap)
 		s.buf.WriteRune(r)
 		return nil
@@ -112,7 +307,8 @@ func keyStart(s *scanner, r rune) error {
 		return nil
 	}
 
-	return fmt.Errorf("invalid string value '%v'", string(r))
+	s.buf.WriteRune(r)
+	return s.genErr(`"`)
 }
 
 func keyEnd(s *scanner, r rune) error {
@@ -145,7 +341,7 @@ func colon(s *scanner, r rune) error {
 		return nil
 	}
 
-	return fmt.Errorf("invalid rune '%v' looking for ':'", string(r))
+	return s.genErr(":")
 }
 
 func strValueStart(s *scanner, r rune) error {
@@ -167,6 +363,35 @@ func strValueStart(s *scanner, r rune) error {
 	return nil
 }
 
+func boolNullStart(s *scanner, r rune) error {
+	s.buf.WriteRune(r)
+	if s.ftn[0] == r {
+		s.ftn = s.ftn[1:]
+		if len(s.ftn) == 0 {
+			s.buf.WriteString(ts.C)
+			s.next = valueEnd
+		}
+		return nil
+	}
+	/*
+		state := s.state[len(s.state)-1]
+		switch state {
+		case objState:
+			switch r {
+			case ',':
+
+			case '}'
+			}
+		case arrState:
+			switch r {
+
+			}
+		}
+	*/
+
+	return s.genErr(string(s.ftn[0]))
+}
+
 func valueEnd(s *scanner, r rune) error {
 	if len(s.state) == 0 {
 		s.buf.WriteRune(r)
@@ -185,6 +410,7 @@ func valueEnd(s *scanner, r rune) error {
 		switch r {
 		case ',':
 			s.next = keyStart
+			s.pushState(keyState)
 			s.buf.WriteRune(r)
 			return nil
 		case '}':
@@ -194,18 +420,57 @@ func valueEnd(s *scanner, r rune) error {
 			s.buf.WriteString(ts.C)
 			return nil
 		}
-		return fmt.Errorf("invalid end object value '%v'", string(r))
+
+		s.buf.WriteRune(r)
+		return s.genErr(",", "}")
 	case arrState:
 		switch r {
 		case ',':
 			s.next = valueStart
+			s.buf.WriteRune(r)
 			return nil
 		case ']':
 			s.popState()
+			s.buf.WriteString(arrWrap)
+			s.buf.WriteRune(r)
+			s.buf.WriteString(ts.C)
 			return nil
 		}
-		return fmt.Errorf("invalid end array value '%v'", string(r))
+
+		s.buf.WriteRune(r)
+		return s.genErr(",", "]")
 	}
 
 	return nil
+}
+
+func (s *scanner) genErr(expected ...string) error {
+	errFmt := ""
+	if len(expected) > 0 {
+		errFmt = "%s" + fmt.Sprintf("invalid char, looking for '%s'", strings.Join(expected, " or "))
+	} else {
+		errFmt = "%sinvalid char"
+	}
+
+	str := s.buf.String()
+	if len(str) == 0 {
+		return fmt.Errorf(errFmt, "")
+	}
+
+	if len(str) == 1 {
+		e := errWrap + str + ts.C + "<-- "
+		return fmt.Errorf(errFmt, e)
+	}
+
+	// keep last 100 chars
+	if len(str) > 100 {
+		str = str[len(str)-100:]
+	}
+
+	// pop
+	e, r := str[:len(str)-1], str[len(str)-1]
+
+	e += ts.C + errWrap + string(r) + ts.C + "<-- "
+
+	return fmt.Errorf(errFmt, e)
 }
