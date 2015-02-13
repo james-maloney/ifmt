@@ -10,28 +10,36 @@ import (
 	"os"
 )
 
-var isXml bool
+var (
+	isXml   bool
+	noColor bool
+	indent  string
+)
 
 func init() {
 	flag.BoolVar(&isXml, "xml", false, "format XML")
+	flag.BoolVar(&noColor, "no-color", false, "no color")
+	flag.StringVar(&indent, "indent", "\t", "indent")
 }
 
 func main() {
-	s := bufio.NewScanner(os.Stdin)
+	flag.Parse()
 
+	s := bufio.NewScanner(os.Stdin)
 	for s.Scan() {
 		if isXml {
 			b := formatXml(s.Bytes())
 			fmt.Println(string(b))
 		} else {
-			b := formatJson(s.Bytes())
-			s := &scanner{}
-			if err := s.parse(b); err != nil {
+			sc := &scanner{
+				color:  !noColor,
+				indent: indent,
+			}
+			if err := sc.parse(s.Bytes()); err != nil {
 				log.Fatal(err)
 			}
-			fmt.Println(s.buf.String())
+			fmt.Println(sc.buf.String())
 		}
-
 	}
 
 	if err := s.Err(); err != nil {

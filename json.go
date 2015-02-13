@@ -15,7 +15,6 @@ const (
 	_ = iota
 	objState
 	arrState
-	keyState
 	skipState
 	strValueState
 )
@@ -32,9 +31,12 @@ var (
 )
 
 type scanner struct {
-	state []int
-	next  func(*scanner, rune) error
-	ftn   []rune // false/true/null helper state
+	state  []int
+	next   func(*scanner, rune) error
+	ftn    []rune // false/true/null helper state
+	color  bool
+	indent string
+	last   rune
 
 	buf bytes.Buffer
 }
@@ -52,18 +54,52 @@ func (s *scanner) popState() int {
 func (s *scanner) parse(data []byte) error {
 	s.next = valueStart
 	for _, v := range data {
-		if err := s.next(s, rune(v)); err != nil {
+		r := rune(v)
+		if err := s.next(s, r); err != nil {
 			if err == eof {
 				return nil
 			}
 			return err
 		}
+		s.last = r
 	}
 	if len(s.state) == 0 {
 		return nil
 	}
 
 	return fmt.Errorf("JSON is incomplete")
+}
+
+func (s *scanner) wrap(str string) {
+	if !s.color {
+		return
+	}
+	s.buf.WriteString(str)
+}
+
+func (s *scanner) indentNewLine(r rune) {
+	if len(s.state) == 0 {
+		s.buf.WriteRune('\n')
+		return
+	}
+	if s.buf.Len() == 0 {
+		return
+	}
+	if s.last == '[' && r == ']' {
+		return
+	}
+
+	s.buf.WriteRune('\n')
+	s.buf.WriteString(strings.Repeat(s.indent, len(s.state)))
+}
+
+func (s *scanner) valueIndent(r rune) {
+	if len(s.state) == 0 {
+		return
+	}
+	if s.state[len(s.state)-1] == arrState {
+		s.indentNewLine(r)
+	}
 }
 
 func negNumStart(s *scanner, r rune) error {
@@ -87,10 +123,13 @@ func zeroNumStart(s *scanner, r rune) error {
 		return nil
 	}
 
-	s.buf.WriteString(ts.C)
+	s.wrap(ts.C)
 
+	return endValue(s, r)
+}
+
+func endValue(s *scanner, r rune) error {
 	if unicode.IsSpace(r) {
-		s.next = valueEnd
 		return nil
 	}
 
@@ -99,14 +138,14 @@ func zeroNumStart(s *scanner, r rune) error {
 		switch r {
 		case ',':
 			s.next = keyStart
-			s.pushState(keyState)
 			s.buf.WriteRune(r)
 			return nil
 		case '}':
 			s.popState()
-			s.buf.WriteString(objWrap)
+			s.indentNewLine(r)
+			s.wrap(objWrap)
 			s.buf.WriteRune(r)
-			s.buf.WriteString(ts.C)
+			s.wrap(ts.C)
 			return nil
 		}
 
@@ -120,9 +159,10 @@ func zeroNumStart(s *scanner, r rune) error {
 			return nil
 		case ']':
 			s.popState()
-			s.buf.WriteString(arrWrap)
+			s.indentNewLine(r)
+			s.wrap(arrWrap)
 			s.buf.WriteRune(r)
-			s.buf.WriteString(ts.C)
+			s.wrap(ts.C)
 			return nil
 		}
 
@@ -181,51 +221,9 @@ func numEnd(s *scanner, r rune) error {
 		return nil
 	}
 
-	s.buf.WriteString(ts.C)
+	s.wrap(ts.C)
 
-	if unicode.IsSpace(r) {
-		s.buf.WriteRune(r)
-		s.next = valueEnd
-		return nil
-	}
-
-	switch s.state[len(s.state)-1] {
-	case objState:
-		switch r {
-		case ',':
-			s.next = keyStart
-			s.pushState(keyState)
-			s.buf.WriteRune(r)
-			return nil
-		case '}':
-			s.popState()
-			s.buf.WriteString(objWrap)
-			s.buf.WriteRune(r)
-			s.buf.WriteString(ts.C)
-			return nil
-		}
-
-		s.buf.WriteRune(r)
-		return s.genErr(",", "}")
-	case arrState:
-		switch r {
-		case ',':
-			s.next = valueStart
-			s.buf.WriteRune(r)
-			return nil
-		case ']':
-			s.popState()
-			s.buf.WriteString(arrWrap)
-			s.buf.WriteRune(r)
-			s.buf.WriteString(ts.C)
-			return nil
-		}
-
-		s.buf.WriteRune(r)
-		return s.genErr(",", "]")
-	}
-
-	return fmt.Errorf("invalid num state")
+	return endValue(s, r)
 }
 
 func valueStart(s *scanner, r rune) error {
@@ -233,68 +231,74 @@ func valueStart(s *scanner, r rune) error {
 	case '{':
 		s.next = keyStart
 		s.pushState(objState)
-		s.pushState(keyState)
-		s.buf.WriteString(objWrap)
+		s.wrap(objWrap)
 		s.buf.WriteRune(r)
-		s.buf.WriteString(ts.C)
+		s.wrap(ts.C)
 		return nil
 	case '[':
 		s.next = valueStart
 		s.pushState(arrState)
-		s.buf.WriteString(arrWrap)
+		s.wrap(arrWrap)
 		s.buf.WriteRune(r)
-		s.buf.WriteString(ts.C)
+		s.wrap(ts.C)
 		return nil
 	case ']':
 		s.next = valueEnd
 		s.popState()
-		s.buf.WriteString(arrWrap)
+		s.indentNewLine(r)
+		s.wrap(arrWrap)
 		s.buf.WriteRune(r)
-		s.buf.WriteString(ts.C)
+		s.wrap(ts.C)
 		return nil
 	case '"':
+		s.valueIndent(r)
 		s.next = strValueStart
 		s.pushState(strValueState)
-		s.buf.WriteString(strWrap)
+		s.wrap(strWrap)
 		s.buf.WriteRune(r)
 		return nil
 	case 't':
+		s.valueIndent(r)
 		s.ftn = []rune{'r', 'u', 'e'}
 		s.next = boolNullStart
-		s.buf.WriteString(boolWrap)
+		s.wrap(boolWrap)
 		s.buf.WriteRune(r)
 		return nil
 	case 'f':
+		s.valueIndent(r)
 		s.ftn = []rune{'a', 'l', 's', 'e'}
 		s.next = boolNullStart
-		s.buf.WriteString(boolWrap)
+		s.wrap(boolWrap)
 		s.buf.WriteRune(r)
 		return nil
 	case 'n':
+		s.valueIndent(r)
 		s.ftn = []rune{'u', 'l', 'l'}
 		s.next = boolNullStart
-		s.buf.WriteString(nullWrap)
+		s.wrap(nullWrap)
 		s.buf.WriteRune(r)
 		return nil
 	case '0':
+		s.valueIndent(r)
 		s.next = zeroNumStart
-		s.buf.WriteString(numWrap)
+		s.wrap(numWrap)
 		s.buf.WriteRune(r)
 		return nil
 	case '-':
+		s.valueIndent(r)
 		s.next = numStart
-		s.buf.WriteString(numWrap)
+		s.wrap(numWrap)
 		s.buf.WriteRune(r)
 		return nil
 	}
 	if r >= '1' && r <= '9' {
+		s.valueIndent(r)
 		s.next = numStart
-		s.buf.WriteString(numWrap)
+		s.wrap(numWrap)
 		s.buf.WriteRune(r)
 		return nil
 	}
 	if unicode.IsSpace(r) {
-		s.buf.WriteRune(r)
 		return nil
 	}
 
@@ -304,22 +308,21 @@ func valueStart(s *scanner, r rune) error {
 
 func keyStart(s *scanner, r rune) error {
 	if r == '"' {
+		s.indentNewLine(r)
 		s.next = keyEnd
-		s.buf.WriteString(keyWrap)
+		s.wrap(keyWrap)
 		s.buf.WriteRune(r)
 		return nil
 	}
 	if unicode.IsSpace(r) {
-		s.buf.WriteRune(r)
 		return nil
 	}
 	if r == '}' {
 		s.next = valueEnd
 		s.popState()
-		s.popState()
-		s.buf.WriteString(objWrap)
+		s.wrap(objWrap)
 		s.buf.WriteRune(r)
-		s.buf.WriteString(ts.C)
+		s.wrap(ts.C)
 		return nil
 	}
 
@@ -339,8 +342,7 @@ func keyEnd(s *scanner, r rune) error {
 	}
 	if r == '"' {
 		s.next = colon
-		s.popState()
-		s.buf.WriteString(ts.C)
+		s.wrap(ts.C)
 		return nil
 	}
 
@@ -350,6 +352,7 @@ func keyEnd(s *scanner, r rune) error {
 func colon(s *scanner, r rune) error {
 	s.buf.WriteRune(r)
 	if r == ':' {
+		s.buf.WriteRune(' ')
 		s.next = valueStart
 		return nil
 	}
@@ -373,7 +376,7 @@ func strValueStart(s *scanner, r rune) error {
 	if r == '"' {
 		s.popState()
 		s.next = valueEnd
-		s.buf.WriteString(ts.C)
+		s.wrap(ts.C)
 		return nil
 	}
 	return nil
@@ -384,38 +387,23 @@ func boolNullStart(s *scanner, r rune) error {
 	if s.ftn[0] == r {
 		s.ftn = s.ftn[1:]
 		if len(s.ftn) == 0 {
-			s.buf.WriteString(ts.C)
+			s.wrap(ts.C)
 			s.next = valueEnd
 		}
 		return nil
 	}
-	/*
-		state := s.state[len(s.state)-1]
-		switch state {
-		case objState:
-			switch r {
-			case ',':
-
-			case '}'
-			}
-		case arrState:
-			switch r {
-
-			}
-		}
-	*/
 
 	return s.genErr(string(s.ftn[0]))
 }
 
 func valueEnd(s *scanner, r rune) error {
 	if len(s.state) == 0 {
+		fmt.Println("last rune", string(r))
 		s.buf.WriteRune(r)
 		return eof
 	}
 
 	if unicode.IsSpace(r) {
-		s.buf.WriteRune(r)
 		return nil
 	}
 
@@ -426,14 +414,14 @@ func valueEnd(s *scanner, r rune) error {
 		switch r {
 		case ',':
 			s.next = keyStart
-			s.pushState(keyState)
 			s.buf.WriteRune(r)
 			return nil
 		case '}':
 			s.popState()
-			s.buf.WriteString(objWrap)
+			s.indentNewLine(r)
+			s.wrap(objWrap)
 			s.buf.WriteRune(r)
-			s.buf.WriteString(ts.C)
+			s.wrap(ts.C)
 			return nil
 		}
 
@@ -447,9 +435,10 @@ func valueEnd(s *scanner, r rune) error {
 			return nil
 		case ']':
 			s.popState()
-			s.buf.WriteString(arrWrap)
+			s.indentNewLine(r)
+			s.wrap(arrWrap)
 			s.buf.WriteRune(r)
-			s.buf.WriteString(ts.C)
+			s.wrap(ts.C)
 			return nil
 		}
 

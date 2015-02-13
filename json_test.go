@@ -12,7 +12,7 @@ func TestValueStart(t *testing.T) {
 		pass  bool
 		state int
 	}{
-		{'{', true, keyState},
+		{'{', true, 0},
 		{'[', true, 0},
 		{'"', true, 0},
 		{'0', true, 0},
@@ -55,25 +55,20 @@ func TestKeyStart(t *testing.T) {
 		name  string
 		value rune
 		pass  bool
-		state int
 	}{
-		{"key start", '"', true, keyState},
-		{"empty space", ' ', true, keyState},
-		{"tab rune", '\t', true, keyState},
-		{"invalid rune", 'x', false, 0},
+		{"key start", '"', true},
+		{"empty space", ' ', true},
+		{"tab rune", '\t', true},
+		{"invalid rune", 'x', false},
 	}
 	for _, cs := range cases {
 		t.Log("case:", cs.name)
 		s := &scanner{
-			state: []int{objState, keyState},
+			state: []int{objState},
 		}
 		err := keyStart(s, cs.value)
 		if cs.pass && err != nil {
 			t.Error("\t", err)
-		} else if cs.pass {
-			if cs.state != s.state[len(s.state)-1] {
-				t.Errorf("\tinvalid state: got: %v should: %v", s.state, cs.state)
-			}
 		}
 		if !cs.pass && err == nil {
 			t.Error("should not have passed")
@@ -90,20 +85,20 @@ func TestKeyEnd(t *testing.T) {
 		state int
 		reset bool
 	}{
-		{"key end", '"', true, objState, true},
+		{"key end", '"', true, 0, true},
 		{"escape test", '\\', true, skipState, true},
-		{"escape test line two", '"', true, keyState, false},
-		{"escape test line three", '"', true, objState, false},
+		{"escape test line two", '"', true, objState, false},
+		{"escape test line three", '"', true, 0, false},
 	}
 	for _, cs := range cases {
 		if cs.reset {
-			s.state = []int{objState, keyState}
+			s.state = []int{objState}
 		}
 		t.Log("case:", cs.name)
 		err := keyEnd(s, cs.value)
 		if cs.pass && err != nil {
 			t.Error("\t", err)
-		} else if cs.pass {
+		} else if cs.pass && cs.state > 0 {
 			if cs.state != s.state[len(s.state)-1] {
 				t.Errorf("\tinvalid state: got: %v should: %v", s.state, cs.state)
 			}
@@ -183,34 +178,14 @@ func Test(t *testing.T) {
 	}{
 		{
 			[]byte(`
-{
-	"emptyObj": {},
-	"emptyArr": [],
-	"foo": "bar",
-	"baz": "bang",
-	"bang": {
-		"fizz": "buzz"
-	},
-	"bust": ["bar", "bang", "bust"],
-	"bustTrue": true,
-	"bustFalse": false,
-	"bustNull": null,
-	"nullBoolArray": ["foo", {"foo":"bar"}, false, true, null],
-	"num": 0,
-	"num2": 0.1e10,
-	"num3": -0.100,
-	"num4": 10e1,
-	"num5": 100.999,
-	"numArr": [100, 200, -0.5, 0.5e10],
-	"numObj": {
-		"num": 100
-	}
-}
-`),
+{"emptyObj":{},"emptyArr":[],"foo":"bar","baz":"bang","bang":{"fizz":"buzz"},"bust":["bar","bang","bust"],"bustTrue":true,"bustFalse":false,"bustNull":null,"nullBoolArray":["foo",{"foo":"bar"},false,true,null],"num":0,"num2":0.1e10,"num3":-0.100,"num4":10e1,"num5":100.999,"numArr":[100,200,-0.5,0.5e10],"numObj":{"num":100}}`),
 		},
 	}
 	for _, cs := range cases {
-		s := &scanner{}
+		s := &scanner{
+			color:  true,
+			indent: "\t",
+		}
 		if err := s.parse(cs.val); err != nil {
 			t.Error(err)
 			t.Log(s.state)
